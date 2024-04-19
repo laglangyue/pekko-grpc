@@ -61,9 +61,9 @@ private[pekko] final class UnaryCallAdapter[Res] extends ClientCall.Listener[Res
 @InternalApi
 private[pekko] final class UnaryCallWithMetadataAdapter[Res] extends ClientCall.Listener[Res] {
 
-  private val responsePromise = Promise[GrpcSingleResponse[Res]]
-  private val trailersPromise = Promise[io.grpc.Metadata]
-  private val messagePromise = Promise[Res]
+  private val responsePromise = Promise[GrpcSingleResponse[Res]]()
+  private val trailersPromise = Promise[io.grpc.Metadata]()
+  private val messagePromise = Promise[Res]()
 
   // always invoked before message
   override def onHeaders(headers: Metadata): Unit = {
@@ -71,7 +71,7 @@ private[pekko] final class UnaryCallWithMetadataAdapter[Res] extends ClientCall.
   }
 
   override def onMessage(message: Res): Unit = {
-    if (messagePromise.trySuccess(message)) {} else {
+    if (!messagePromise.trySuccess(message)){
       throw Status.INTERNAL.withDescription("More than one value received for unary call").asRuntimeException()
     }
   }

@@ -95,7 +95,7 @@ class GrpcSingleResponseImpl[T](grpcHeaders: io.grpc.Metadata, trailersPromise: 
   var message: T = _
 
   messagePromise.future.onComplete {
-    case Failure(exception) =>
+    case Failure(exception@_) =>
       throw Status.INTERNAL.withDescription("message complete with exception").asRuntimeException()
     case Success(value) => message = value
   }(ExecutionContexts.parasitic)

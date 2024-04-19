@@ -64,8 +64,8 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
       inheritedAttributes: stream.Attributes): (GraphStageLogic, Future[GrpcResponseMetadata]) = {
     import PekkoNettyGrpcClientGraphStage._
 
-    val trailersPromise = Promise[Metadata]
-    val responsePormise = Promise[GrpcResponseMetadata]
+    val trailersPromise = Promise[io.grpc.Metadata]()
+    val responsePormise = Promise[GrpcResponseMetadata]()
 
     val logic = new GraphStageLogic(shape) with InHandler with OutHandler {
       // this is here just to fail single response requests getting more responses
@@ -160,7 +160,7 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
         } else {
           if (trailersPromise.isCompleted) {
             trailersPromise.future.onComplete {
-              case Failure(exception) => failStage(exception)
+              case Failure(exception@_) => failStage(exception)
               case Success(trailers)  => failStage(status.asRuntimeException(trailers))
             }(ExecutionContexts.parasitic)
           } else {
