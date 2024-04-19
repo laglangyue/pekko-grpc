@@ -20,10 +20,10 @@ import org.apache.pekko
 import org.apache.pekko.dispatch.ExecutionContexts
 import org.apache.pekko.grpc.internal.MetadataImpl
 import org.apache.pekko.util.FutureConverters.FutureOps
-import pekko.annotation.{ApiMayChange, DoNotInherit}
+import pekko.annotation.{ ApiMayChange, DoNotInherit }
 
-import scala.concurrent.{Future, Promise}
-import scala.util.{Failure, Success}
+import scala.concurrent.{ Future, Promise }
+import scala.util.{ Failure, Success }
 
 /**
  * Represents the metadata related to a gRPC call with a streaming response
@@ -74,7 +74,8 @@ trait GrpcSingleResponse[T] extends GrpcResponseMetadata {
   def getValue(): T
 }
 
-class GrpcResponseMetadataImpl(grpcHeaders:io.grpc.Metadata, trailersPromise:Promise[io.grpc.Metadata]) extends GrpcResponseMetadata {
+class GrpcResponseMetadataImpl(
+    grpcHeaders: io.grpc.Metadata, trailersPromise: Promise[io.grpc.Metadata]) extends GrpcResponseMetadata {
 
   override def headers: pekko.grpc.scaladsl.Metadata =
     MetadataImpl.scalaMetadataFromGoogleGrpcMetadata(grpcHeaders)
@@ -87,13 +88,15 @@ class GrpcResponseMetadataImpl(grpcHeaders:io.grpc.Metadata, trailersPromise:Pro
       .asJava
 }
 
-class GrpcSingleResponseImpl[T](grpcHeaders:io.grpc.Metadata, trailersPromise:Promise[io.grpc.Metadata], messagePromise: Promise[T])
-  extends GrpcResponseMetadataImpl(grpcHeaders, trailersPromise) with GrpcSingleResponse[T] {
+class GrpcSingleResponseImpl[T](grpcHeaders: io.grpc.Metadata, trailersPromise: Promise[io.grpc.Metadata],
+    messagePromise: Promise[T])
+    extends GrpcResponseMetadataImpl(grpcHeaders, trailersPromise) with GrpcSingleResponse[T] {
 
-  var message:T = _
+  var message: T = _
 
   messagePromise.future.onComplete {
-    case Failure(exception) => throw Status.INTERNAL.withDescription("message complete with exception").asRuntimeException()
+    case Failure(exception) =>
+      throw Status.INTERNAL.withDescription("message complete with exception").asRuntimeException()
     case Success(value) => message = value
   }(ExecutionContexts.parasitic)
 

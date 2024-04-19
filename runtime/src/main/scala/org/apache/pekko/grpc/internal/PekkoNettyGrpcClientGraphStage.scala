@@ -20,7 +20,6 @@ import pekko.grpc.{ GrpcResponseMetadata, GrpcResponseMetadataImpl }
 import pekko.stream
 import pekko.stream.{ Attributes => _, _ }
 import pekko.stream.stage._
-import pekko.util.FutureConverters._
 import io.grpc._
 
 import scala.concurrent.{ Future, Promise }

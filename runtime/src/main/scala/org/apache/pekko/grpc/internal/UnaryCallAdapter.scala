@@ -16,13 +16,11 @@ package org.apache.pekko.grpc.internal
 import java.util.concurrent.CompletionStage
 import org.apache.pekko
 import pekko.annotation.InternalApi
-import pekko.dispatch.ExecutionContexts
-import pekko.grpc.{GrpcResponseMetadataBuilder, GrpcSingleResponse, GrpcSingleResponseImpl}
+import pekko.grpc.{ GrpcSingleResponse, GrpcSingleResponseImpl }
 import pekko.util.FutureConverters._
-import pekko.util.OptionVal
 import io.grpc._
 
-import scala.concurrent.{Future, Promise}
+import scala.concurrent.{ Future, Promise }
 
 /**
  * gRPC Netty based client listener transforming callbacks into a future response
@@ -72,10 +70,8 @@ private[pekko] final class UnaryCallWithMetadataAdapter[Res] extends ClientCall.
     responsePromise.success(new GrpcSingleResponseImpl(headers, trailersPromise, messagePromise))
   }
 
-
   override def onMessage(message: Res): Unit = {
-    if (messagePromise.trySuccess(message)) {
-    } else {
+    if (messagePromise.trySuccess(message)) {} else {
       throw Status.INTERNAL.withDescription("More than one value received for unary call").asRuntimeException()
     }
   }
