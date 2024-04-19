@@ -16,11 +16,12 @@ package org.apache.pekko.grpc.internal
 import java.util.concurrent.CompletionStage
 import org.apache.pekko
 import pekko.annotation.InternalApi
-import pekko.grpc.{ GrpcSingleResponse, GrpcSingleResponseImpl }
+import pekko.grpc.{GrpcSingleResponse, GrpcSingleResponseImpl}
 import pekko.util.FutureConverters._
 import io.grpc._
+import org.apache.pekko.util.OptionVal
 
-import scala.concurrent.{ Future, Promise }
+import scala.concurrent.{Future, Promise}
 
 /**
  * gRPC Netty based client listener transforming callbacks into a future response
@@ -60,24 +61,26 @@ private[pekko] final class UnaryCallAdapter[Res] extends ClientCall.Listener[Res
 // exceptions like Scala Futures do ;( flip side is that it saves some garbage
 @InternalApi
 private[pekko] final class UnaryCallWithMetadataAdapter[Res] extends ClientCall.Listener[Res] {
-
   private val responsePromise = Promise[GrpcSingleResponse[Res]]()
-  private val trailersPromise = Promise[io.grpc.Metadata]()
-  private val messagePromise = Promise[Res]()
+  private var headers: OptionVal[Metadata] = OptionVal.None
+  private val trailerPromise = Promise[Metadata]()
 
   // always invoked before message
-  override def onHeaders(headers: Metadata): Unit = {
-    responsePromise.success(new GrpcSingleResponseImpl(headers, trailersPromise, messagePromise))
-  }
+  override def onHeaders(headers: Metadata): Unit =
+    this.headers = OptionVal.Some(headers)
 
   override def onMessage(message: Res): Unit = {
-    if (!messagePromise.trySuccess(message)){
+    val headersOnMessage = UnaryCallWithMetadataAdapter.this.headers match {
+      case OptionVal.Some(h) => h
+      case OptionVal.None    => throw new RuntimeException("Never got headers, this should not happen")
+    }
+    if (!responsePromise.trySuccess(new GrpcSingleResponseImpl(headersOnMessage, message, trailerPromise))) {
       throw Status.INTERNAL.withDescription("More than one value received for unary call").asRuntimeException()
     }
   }
 
   override def onClose(status: Status, trailers: Metadata): Unit = {
-    trailersPromise.success(trailers)
+    trailerPromise.success(trailers)
     if (status.isOk) {
       if (!responsePromise.isCompleted)
         // No value received so mark the future as an error

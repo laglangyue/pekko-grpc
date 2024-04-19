@@ -13,8 +13,6 @@
 
 package org.apache.pekko.grpc
 
-import io.grpc.Status
-
 import java.util.concurrent.CompletionStage
 import org.apache.pekko
 import org.apache.pekko.dispatch.ExecutionContexts
@@ -23,7 +21,6 @@ import org.apache.pekko.util.FutureConverters.FutureOps
 import pekko.annotation.{ ApiMayChange, DoNotInherit }
 
 import scala.concurrent.{ Future, Promise }
-import scala.util.{ Failure, Success }
 
 /**
  * Represents the metadata related to a gRPC call with a streaming response
@@ -74,8 +71,14 @@ trait GrpcSingleResponse[T] extends GrpcResponseMetadata {
   def getValue(): T
 }
 
+object GrpcResponseMetadataBuilder {
+
+  def createGrpcResponseMetadata() = {}
+}
+
 class GrpcResponseMetadataImpl(
-    grpcHeaders: io.grpc.Metadata, trailersPromise: Promise[io.grpc.Metadata]) extends GrpcResponseMetadata {
+    grpcHeaders: io.grpc.Metadata,
+    trailersPromise: Promise[io.grpc.Metadata]) extends GrpcResponseMetadata {
 
   override def headers: pekko.grpc.scaladsl.Metadata =
     MetadataImpl.scalaMetadataFromGoogleGrpcMetadata(grpcHeaders)
@@ -88,17 +91,10 @@ class GrpcResponseMetadataImpl(
       .asJava
 }
 
-class GrpcSingleResponseImpl[T](grpcHeaders: io.grpc.Metadata, trailersPromise: Promise[io.grpc.Metadata],
-    messagePromise: Promise[T])
+class GrpcSingleResponseImpl[T](
+    val grpcHeaders: io.grpc.Metadata,
+    message: T, val trailersPromise: Promise[io.grpc.Metadata])
     extends GrpcResponseMetadataImpl(grpcHeaders, trailersPromise) with GrpcSingleResponse[T] {
-
-  var message: T = _
-
-  messagePromise.future.onComplete {
-    case Failure(exception@_) =>
-      throw Status.INTERNAL.withDescription("message complete with exception").asRuntimeException()
-    case Success(value) => message = value
-  }(ExecutionContexts.parasitic)
 
   override def value: T = message
 
