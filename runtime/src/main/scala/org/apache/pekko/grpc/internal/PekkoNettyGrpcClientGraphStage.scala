@@ -16,7 +16,7 @@ package org.apache.pekko.grpc.internal
 import org.apache.pekko
 import pekko.annotation.InternalApi
 import pekko.dispatch.ExecutionContexts
-import pekko.grpc.GrpcResponseMetadata
+import pekko.grpc.{ GrpcResponseMetadata, GrpcResponseMetadataImpl }
 import pekko.stream
 import pekko.stream.{ Attributes => _, _ }
 import pekko.stream.stage._
@@ -24,12 +24,13 @@ import pekko.util.FutureConverters._
 import io.grpc._
 
 import scala.concurrent.{ Future, Promise }
+import scala.util.{ Failure, Success }
 
 @InternalApi
 private object PekkoNettyGrpcClientGraphStage {
   sealed trait ControlMessage
   case object ReadyForSending extends ControlMessage
-  case class Closed(status: Status, trailer: Metadata) extends ControlMessage
+  case class Closed(status: Status) extends ControlMessage
 }
 
 /**
@@ -63,8 +64,9 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
   def createLogicAndMaterializedValue(
       inheritedAttributes: stream.Attributes): (GraphStageLogic, Future[GrpcResponseMetadata]) = {
     import PekkoNettyGrpcClientGraphStage._
-    val matVal = Promise[GrpcResponseMetadata]()
-    val trailerPromise = Promise[Metadata]()
+
+    val trailersPromise = Promise[Metadata]
+    val responsePormise = Promise[GrpcResponseMetadata]
 
     val logic = new GraphStageLogic(shape) with InHandler with OutHandler {
       // this is here just to fail single response requests getting more responses
@@ -76,8 +78,8 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
       val callback = getAsyncCallback[Any] {
         case msg: ControlMessage =>
           msg match {
-            case ReadyForSending         => if (!isClosed(in) && !hasBeenPulled(in)) tryPull(in)
-            case Closed(status, trailer) => onCallClosed(status, trailer)
+            case ReadyForSending => if (!isClosed(in) && !hasBeenPulled(in)) tryPull(in)
+            case Closed(status)  => onCallClosed(status)
           }
         case element: O @unchecked =>
           if (!streamingResponse) {
@@ -95,25 +97,12 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
         override def onReady(): Unit =
           callback.invoke(ReadyForSending)
         override def onHeaders(responseHeaders: Metadata): Unit =
-          matVal.success(new GrpcResponseMetadata {
-            private lazy val sMetadata = MetadataImpl.scalaMetadataFromGoogleGrpcMetadata(responseHeaders)
-            private lazy val jMetadata = MetadataImpl.javaMetadataFromGoogleGrpcMetadata(responseHeaders)
-            def headers = sMetadata
-            def getHeaders() = jMetadata
-
-            private lazy val sTrailers =
-              trailerPromise.future.map(MetadataImpl.scalaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic)
-            private lazy val jTrailers = trailerPromise.future
-              .map(MetadataImpl.javaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic)
-              .asJava
-            def trailers = sTrailers
-            def getTrailers() = jTrailers
-          })
+          responsePormise.success(new GrpcResponseMetadataImpl(responseHeaders, trailersPromise))
         override def onMessage(message: O): Unit =
           callback.invoke(message)
         override def onClose(status: Status, trailers: Metadata): Unit = {
-          trailerPromise.success(trailers)
-          callback.invoke(Closed(status, trailers))
+          trailersPromise.success(trailers)
+          callback.invoke(Closed(status))
         }
       }
       override def preStart(): Unit = {
@@ -166,12 +155,18 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
           completeStage()
         }
 
-      def onCallClosed(status: Status, trailers: Metadata): Unit = {
+      def onCallClosed(status: Status): Unit = {
         if (status.isOk()) {
-          // FIXME share trailers through matval
           completeStage()
         } else {
-          failStage(status.asRuntimeException(trailers))
+          if (trailersPromise.isCompleted) {
+            trailersPromise.future.onComplete {
+              case Failure(exception) => failStage(exception)
+              case Success(trailers)  => failStage(status.asRuntimeException(trailers))
+            }(ExecutionContexts.parasitic)
+          } else {
+            responsePormise.tryFailure(new AbruptStageTerminationException(this))
+          }
         }
         call = null
       }
@@ -181,14 +176,14 @@ private final class PekkoNettyGrpcClientGraphStage[I, O](
           call.cancel("Abrupt stream termination", null)
           call = null
         }
-        if (!matVal.isCompleted) {
-          matVal.tryFailure(new AbruptStageTerminationException(this))
+        if (!responsePormise.isCompleted) {
+          responsePormise.tryFailure(new AbruptStageTerminationException(this))
         }
       }
 
       setHandlers(in, out, this)
     }
 
-    (logic, matVal.future)
+    (logic, responsePormise.future)
   }
 }

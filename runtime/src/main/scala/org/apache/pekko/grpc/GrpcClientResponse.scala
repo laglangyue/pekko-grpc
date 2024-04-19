@@ -13,12 +13,17 @@
 
 package org.apache.pekko.grpc
 
+import io.grpc.Status
+
 import java.util.concurrent.CompletionStage
-
 import org.apache.pekko
-import pekko.annotation.{ ApiMayChange, DoNotInherit }
+import org.apache.pekko.dispatch.ExecutionContexts
+import org.apache.pekko.grpc.internal.MetadataImpl
+import org.apache.pekko.util.FutureConverters.FutureOps
+import pekko.annotation.{ApiMayChange, DoNotInherit}
 
-import scala.concurrent.Future
+import scala.concurrent.{Future, Promise}
+import scala.util.{Failure, Success}
 
 /**
  * Represents the metadata related to a gRPC call with a streaming response
@@ -67,4 +72,32 @@ trait GrpcSingleResponse[T] extends GrpcResponseMetadata {
    * Java API: The response body
    */
   def getValue(): T
+}
+
+class GrpcResponseMetadataImpl(grpcHeaders:io.grpc.Metadata, trailersPromise:Promise[io.grpc.Metadata]) extends GrpcResponseMetadata {
+
+  override def headers: pekko.grpc.scaladsl.Metadata =
+    MetadataImpl.scalaMetadataFromGoogleGrpcMetadata(grpcHeaders)
+  override def getHeaders(): pekko.grpc.javadsl.Metadata =
+    MetadataImpl.javaMetadataFromGoogleGrpcMetadata(grpcHeaders)
+  override def trailers: Future[pekko.grpc.scaladsl.Metadata] =
+    trailersPromise.future.map(MetadataImpl.scalaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic)
+  override def getTrailers(): CompletionStage[pekko.grpc.javadsl.Metadata] =
+    trailersPromise.future.map(MetadataImpl.javaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic)
+      .asJava
+}
+
+class GrpcSingleResponseImpl[T](grpcHeaders:io.grpc.Metadata, trailersPromise:Promise[io.grpc.Metadata], messagePromise: Promise[T])
+  extends GrpcResponseMetadataImpl(grpcHeaders, trailersPromise) with GrpcSingleResponse[T] {
+
+  var message:T = _
+
+  messagePromise.future.onComplete {
+    case Failure(exception) => throw Status.INTERNAL.withDescription("message complete with exception").asRuntimeException()
+    case Success(value) => message = value
+  }(ExecutionContexts.parasitic)
+
+  override def value: T = message
+
+  override def getValue(): T = message
 }

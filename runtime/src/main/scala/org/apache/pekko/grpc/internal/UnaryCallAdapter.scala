@@ -14,16 +14,15 @@
 package org.apache.pekko.grpc.internal
 
 import java.util.concurrent.CompletionStage
-
 import org.apache.pekko
 import pekko.annotation.InternalApi
 import pekko.dispatch.ExecutionContexts
-import pekko.grpc.GrpcSingleResponse
+import pekko.grpc.{GrpcResponseMetadataBuilder, GrpcSingleResponse, GrpcSingleResponseImpl}
 import pekko.util.FutureConverters._
 import pekko.util.OptionVal
 import io.grpc._
 
-import scala.concurrent.{ Future, Promise }
+import scala.concurrent.{Future, Promise}
 
 /**
  * gRPC Netty based client listener transforming callbacks into a future response
@@ -63,56 +62,35 @@ private[pekko] final class UnaryCallAdapter[Res] extends ClientCall.Listener[Res
 // exceptions like Scala Futures do ;( flip side is that it saves some garbage
 @InternalApi
 private[pekko] final class UnaryCallWithMetadataAdapter[Res] extends ClientCall.Listener[Res] {
-  private val responsePromise = Promise[GrpcSingleResponse[Res]]()
-  private var headers: OptionVal[Metadata] = OptionVal.None
-  private val trailerPromise = Promise[Metadata]()
+
+  private val responsePromise = Promise[GrpcSingleResponse[Res]]
+  private val trailersPromise = Promise[io.grpc.Metadata]
+  private val messagePromise = Promise[Res]
 
   // always invoked before message
-  override def onHeaders(headers: Metadata): Unit =
-    this.headers = OptionVal.Some(headers)
+  override def onHeaders(headers: Metadata): Unit = {
+    responsePromise.success(new GrpcSingleResponseImpl(headers, trailersPromise, messagePromise))
+  }
+
 
   override def onMessage(message: Res): Unit = {
-    val responseWithMetadata = new GrpcSingleResponse[Res] {
-      // close over var and make final
-      private val headersOnMessage = UnaryCallWithMetadataAdapter.this.headers match {
-        case OptionVal.Some(h) => h
-        case OptionVal.None    => throw new RuntimeException("Never got headers, this should not happen")
-      }
-
-      override def value: Res = message
-      override def getValue(): Res = message
-
-      private lazy val sMetadata: pekko.grpc.scaladsl.Metadata =
-        MetadataImpl.scalaMetadataFromGoogleGrpcMetadata(headersOnMessage)
-      private lazy val jMetadata: pekko.grpc.javadsl.Metadata =
-        MetadataImpl.javaMetadataFromGoogleGrpcMetadata(headersOnMessage)
-      override def headers = sMetadata
-      override def getHeaders() = jMetadata
-
-      private lazy val sTrailer =
-        trailerPromise.future.map(MetadataImpl.scalaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic)
-      private lazy val jTrailer =
-        trailerPromise.future.map(MetadataImpl.javaMetadataFromGoogleGrpcMetadata)(ExecutionContexts.parasitic).asJava
-
-      def trailers = sTrailer
-      def getTrailers() = jTrailer
-    }
-    if (!responsePromise.trySuccess(responseWithMetadata)) {
+    if (messagePromise.trySuccess(message)) {
+    } else {
       throw Status.INTERNAL.withDescription("More than one value received for unary call").asRuntimeException()
     }
   }
 
-  override def onClose(status: Status, trailers: Metadata): Unit =
+  override def onClose(status: Status, trailers: Metadata): Unit = {
+    trailersPromise.success(trailers)
     if (status.isOk) {
       if (!responsePromise.isCompleted)
         // No value received so mark the future as an error
         responsePromise.tryFailure(
           Status.INTERNAL.withDescription("No value received for unary call").asRuntimeException(trailers))
-      trailerPromise.success(trailers)
     } else {
       responsePromise.tryFailure(status.asRuntimeException(trailers))
-      trailerPromise.success(trailers)
     }
+  }
 
   def future: Future[GrpcSingleResponse[Res]] = responsePromise.future
   def cs: CompletionStage[GrpcSingleResponse[Res]] = future.asJava
